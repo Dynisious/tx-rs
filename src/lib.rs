@@ -6,11 +6,13 @@
 
 #![deny(missing_docs,)]
 #![no_std]
-#![feature(cell_update, range_is_empty, weak_counts, const_fn, const_vec_new,)]
+#![feature(cell_update, range_is_empty, weak_counts, const_fn, const_vec_new, test,)]
 
 extern crate alloc;
 #[cfg(test,)]
 extern crate std;
+#[cfg(test,)]
+extern crate test;
 
 mod tx_guard;
 pub mod sync;

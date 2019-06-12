@@ -16,6 +16,10 @@ const ADD_READER: usize = 0b10;
 const SUB_READER: usize = !WRITE_BIT;
 
 /// A basic Read-Write lock using spin locking.
+/// 
+/// # Safety
+/// 
+/// Trying to get more than one lock at a time is liable to result in a deadlock.
 pub(super) struct RwLock<T,> {
   value: T,
   state: AtomicUsize,
@@ -162,4 +166,49 @@ impl<T,> Borrow<T,> for WriteGuard<'_, T,> {
 impl<T,> BorrowMut<T,> for WriteGuard<'_, T,> {
   #[inline]
   fn borrow_mut(&mut self,) -> &mut T { self }
+}
+
+#[cfg(test,)]
+mod tests {
+  use super::*;
+  use ::test::Bencher;
+  
+  #[test]
+  fn test_rw_lock_multithread() {
+    use std::thread;
+    use alloc::vec::Vec;
+    use core::{mem, time::Duration,};
+    
+    static LOCK: RwLock<()> = RwLock::new((),);
+
+    let threads = (0..5).map(|_,| {
+        thread::spawn(|| {
+          for _ in 0..50 {
+            let write = LOCK.write();
+            thread::sleep(Duration::from_millis(50),);
+            test::black_box(mem::drop(write,),);
+
+            for _ in (0..20).map(|_,| test::black_box(LOCK.read(),),) {}
+          }
+        },)
+      },)
+      .collect::<Vec<_>>();
+    
+    for thread in threads {
+      thread.join().unwrap();
+    }
+  }
+  #[bench]
+  fn bench_rw_lock_multithread(b: &mut Bencher,) {
+    use core::mem;
+    
+    static LOCK: RwLock<()> = RwLock::new((),);
+
+    b.iter(|| {
+      let write = LOCK.write();
+      test::black_box(mem::drop(write,),);
+
+      for _ in (0..20).map(|_,| test::black_box(LOCK.read(),),) {}
+    },)
+  }
 }
