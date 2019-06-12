@@ -1,19 +1,23 @@
+//! Defines transaction types which can be sent and shared between threads.
+//! 
 //! Author --- daniel.bechaz@gmail.com  
-//! Last Moddified --- 2019-06-12
+//! Last Moddified --- 2019-06-13
 
 use super::*;
 use core::fmt;
+use alloc::sync::Arc;
 
+mod rw_lock;
 mod tx_box;
 
-use self::tx_box::*;
+use self::{rw_lock::*, tx_box::*,};
 
 /// A guard to an open transaction.
 /// 
 /// When dropped the transaction will be aborted.
 pub struct TxGuard {
   /// The `TxBox` which represents this transaction.
-  tx_box: RcTxBox,
+  tx_box: RwTxBox,
 }
 
 impl TxGuard {
@@ -24,14 +28,14 @@ impl TxGuard {
   /// close --- If `true` the transaction state is set to `Closed` otherwise it's set to `Abort`.  
   #[inline]
   fn _close_tx(&mut self, close: bool,) -> TxResult<()> {
-    self.tx_box.close_tx(close,)
+    self.tx_box.write().close_tx(close,)
   }
 }
 
 impl TxGuard {
   /// Starts a new transaction.
   pub fn new() -> Self {
-    Self { tx_box: TxBox::new().into(), }
+    Self { tx_box: Arc::new(TxBox::new().into(),), }
   }
   /// Starts a new transaction and adds it as a dependency of this transaction.
   /// 
@@ -110,7 +114,7 @@ impl TxGuard {
       tx_box
     };
 
-    tx_box.poison();
+    tx_box.write().poison();
   }
   /// Adds `other_tx` as a dependency of this transaction.
   /// 
@@ -132,7 +136,11 @@ impl TxGuard {
   /// assert!(!tx2.wait_for(&tx1));
   /// ```
   pub fn wait_for(&mut self, other_tx: &TxRef,) -> bool {
-    self.tx_box.wait_for(&other_tx.0,)
+    if other_tx.will_wait(self,) { return false }
+
+    unsafe { self.tx_box.write().wait_for_unchecked(&other_tx.0,); }
+
+    true
   }
   /// Adds `other_tx` as a dependency of this transaction.
   /// 
@@ -142,7 +150,7 @@ impl TxGuard {
   /// dependency will create a cycle; it is therefor the responsibility of the caller to
   /// ensure no cycles will be created to avoid deadlocks.
   pub unsafe fn wait_for_unchecked(&mut self, other_tx: &TxRef,) {
-    self.tx_box.wait_for_unchecked(&other_tx.0,)
+    self.tx_box.write().wait_for_unchecked(&other_tx.0,)
   }
   /// Clears the poisoned state of this transaction and resets it to opened.
   /// 
@@ -170,8 +178,7 @@ impl TxGuard {
   /// 
   /// It is the responsibility to of the caller to handle the poisoned dependency so that
   /// this transaction can continue normally.
-  #[inline]
-  pub fn clear_poisoned(&mut self,) { self.tx_box.clear_poisoned() }
+  pub fn clear_poisoned(&mut self,) { self.tx_box.write().clear_poisoned() }
   /// Returns a [TxRef] for this transaction.
   /// 
   /// # Examples
@@ -198,14 +205,14 @@ impl core::ops::Deref for TxGuard {
 
   #[inline]
   fn deref(&self,) -> &Self::Target {
-    //Safe because both types are wrappers around a `RcTxBox`.
+    //Safe because both types are wrappers around a `RwTxBox`.
     unsafe { core::mem::transmute(self,) }
   }
 }
 
 impl PartialEq for TxGuard {
   #[inline]
-  fn eq(&self, rhs: &Self,) -> bool { alloc::rc::Rc::ptr_eq(&self.tx_box, &rhs.tx_box,) }
+  fn eq(&self, rhs: &Self,) -> bool { alloc::sync::Arc::ptr_eq(&self.tx_box, &rhs.tx_box,) }
 }
 
 impl Eq for TxGuard {}
@@ -233,12 +240,12 @@ impl fmt::Debug for TxGuard {
 }
 
 /// A reference to a transaction.
-pub struct TxRef(RcTxBox,);
+pub struct TxRef(RwTxBox,);
 
 impl TxRef {
   /// Returns the current state of the transaction.
   #[inline]
-  pub fn tx_state(&self,) -> TxState { self.0.tx_state() }
+  pub fn tx_state(&self,) -> TxState { self.0.read().tx_state() }
   /// Returns `true` if `other_tx` is a dependecy of `self` or if `other_tx` is self.
   /// 
   /// # Examples
@@ -253,13 +260,13 @@ impl TxRef {
   /// assert!(tx1.will_wait(&tx2,));
   /// ```
   pub fn will_wait(&self, other_tx: &TxRef,) -> bool {
-    self.0.will_wait(&other_tx.0,)
+    self.0.read().will_wait(&other_tx.0.read(),)
   }
 }
 
 impl PartialEq for TxRef {
   #[inline]
-  fn eq(&self, rhs: &Self,) -> bool { alloc::rc::Rc::ptr_eq(&self.0, &rhs.0,) }
+  fn eq(&self, rhs: &Self,) -> bool { alloc::sync::Arc::ptr_eq(&self.0, &rhs.0,) }
 }
 
 impl Eq for TxRef {}
