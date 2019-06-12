@@ -3,6 +3,12 @@
 
 use super::*;
 use core::fmt;
+#[cfg(feature = "futures",)]
+use core::{
+  future::Future,
+  task::{Poll, Context,},
+  pin::Pin,
+};
 
 mod tx_box;
 
@@ -254,6 +260,19 @@ impl TxRef {
   /// ```
   pub fn will_wait(&self, other_tx: &TxRef,) -> bool {
     self.0.will_wait(&other_tx.0,)
+  }
+}
+
+#[cfg(feature = "futures",)]
+impl Future for TxRef {
+  type Output = TxState;
+
+  /// Returns `Poll::Pending` as long as the transaction is open.
+  fn poll(self: Pin<&mut Self>, _: &mut Context,) -> Poll<Self::Output> {
+    match self.tx_state() {
+      TxState::Open => Poll::Pending,
+      state => Poll::Ready(state),
+    }
   }
 }
 
