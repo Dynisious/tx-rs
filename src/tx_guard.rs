@@ -10,17 +10,10 @@ use self::tx_box::*;
 
 /// A guard to an open transaction.
 /// 
-/// When dropped this transaction will be aborted.
+/// When dropped the transaction will be aborted.
 pub struct TxGuard {
   /// The `TxBox` which represents this transaction.
   tx_box: RcTxBox,
-}
-
-impl TxGuard {
-  /// Starts a new transaction.
-  pub fn new() -> Self {
-    Self { tx_box: TxBox::new().into(), }
-  }
 }
 
 impl TxGuard {
@@ -36,6 +29,33 @@ impl TxGuard {
 }
 
 impl TxGuard {
+  /// Starts a new transaction.
+  pub fn new() -> Self {
+    Self { tx_box: TxBox::new().into(), }
+  }
+  /// Starts a new transaction and adds it as a dependency of this transaction.
+  /// 
+  /// # Examples
+  /// 
+  /// ```rust
+  /// use tx_rs::TxGuard;
+  /// 
+  /// let mut tx1 = TxGuard::new();
+  /// let tx2 = tx1.sub_tx();
+  /// 
+  /// let (tx1, _) = tx1.close().unwrap_err();
+  /// 
+  /// tx2.close().unwrap();
+  /// tx1.close().unwrap();
+  /// ```
+  pub fn sub_tx(&mut self,) -> Self {
+    let tx = Self::new();
+
+    //Safe because we just created `tx` so there can be no cycle.
+    unsafe { self.wait_for_unchecked(&tx,); }
+
+    tx
+  }
   /// Attempts to close this transaction.
   /// 
   /// If this transaction cannot be closed for some reason the guard is returned along
@@ -93,6 +113,18 @@ impl TxGuard {
     tx_box.poison();
   }
   /// Returns `true` if `other_tx` is a dependecy of `self` or if `other_tx` is self.
+  /// 
+  /// # Examples
+  /// 
+  /// ```rust
+  /// use tx_rs::TxGuard;
+  /// 
+  /// let mut tx1 = TxGuard::new();
+  /// assert!(tx1.will_wait(&tx1,));
+  /// 
+  /// let tx2 = tx1.sub_tx();
+  /// assert!(tx1.will_wait(&tx2,));
+  /// ```
   pub fn will_wait(&self, other_tx: &TxRef,) -> bool {
     self.tx_box.will_wait(&other_tx.0,)
   }
@@ -103,6 +135,18 @@ impl TxGuard {
   /// 
   /// Note that this function does allow you to add a transaction as a dependency more
   /// than once.
+  /// 
+  /// # Examples
+  /// 
+  /// ```rust
+  /// use tx_rs::TxGuard;
+  /// 
+  /// let mut tx1 = TxGuard::new();
+  /// let mut tx2 = TxGuard::new();
+  /// 
+  /// assert!(tx1.wait_for(&tx2));
+  /// assert!(!tx2.wait_for(&tx1));
+  /// ```
   pub fn wait_for(&mut self, other_tx: &TxRef,) -> bool {
     self.tx_box.wait_for(&other_tx.0,)
   }
@@ -123,13 +167,39 @@ impl TxGuard {
   /// Calling `close`/`abort` after clearing the poisoned state will still poison this transaction as many times as there are poisoned dependencies.  
   /// The poisoned state will need to be cleared each time.
   /// 
+  /// # Examples
+  /// 
+  /// ```rust
+  /// use tx_rs::TxGuard;
+  /// 
+  /// let mut tx1 = TxGuard::new();
+  /// 
+  /// tx1.sub_tx().poison();
+  /// 
+  /// let (mut tx1, _) = tx1.close().unwrap_err();
+  /// 
+  /// tx1.clear_poisoned();
+  /// tx1.close().unwrap();
+  /// ```
+  /// 
   /// # Safety
   /// 
   /// It is the responsibility to of the caller to handle the poisoned dependency so that
   /// this transaction can continue normally.
   #[inline]
   pub fn clear_poisoned(&mut self,) { self.tx_box.clear_poisoned() }
-  /// Returns a `TxRef` for this transaction.
+  /// Returns a [TxRef] for this transaction.
+  /// 
+  /// # Examples
+  /// 
+  /// ```rust
+  /// use tx_rs::TxGuard;
+  /// 
+  /// let mut tx1 = TxGuard::new();
+  /// let tx2 = tx1.sub_tx().tx_ref();
+  /// 
+  /// assert!(tx1.will_wait(&tx2));
+  /// ```
   #[inline]
   pub fn tx_ref(&self,) -> TxRef { TxRef(self.tx_box.clone(),) }
 }
@@ -156,6 +226,11 @@ impl PartialEq for TxGuard {
 
 impl Eq for TxGuard {}
 
+impl PartialEq<TxRef> for TxGuard {
+  #[inline]
+  fn eq(&self, rhs: &TxRef,) -> bool { rhs == self }
+}
+
 impl AsRef<TxRef> for TxGuard {
   #[inline]
   fn as_ref(&self,) -> &TxRef { self }
@@ -173,7 +248,7 @@ impl fmt::Debug for TxGuard {
   }
 }
 
-/// A reference a transaction.
+/// A reference to a transaction.
 pub struct TxRef(RcTxBox,);
 
 impl TxRef {
@@ -188,6 +263,11 @@ impl PartialEq for TxRef {
 }
 
 impl Eq for TxRef {}
+
+impl PartialEq<TxGuard> for TxRef {
+  #[inline]
+  fn eq(&self, rhs: &TxGuard,) -> bool { self == rhs.as_ref() }
+}
 
 #[cfg(test,)]
 mod tests {
@@ -223,30 +303,26 @@ mod tests {
     assert!(tx1.close().is_err(), "Closed `tx1` while `tx2` was still open",);
     
     let mut tx1 = TxGuard::new();
-    let tx2 = TxGuard::new();
+    let tx2 = tx1.sub_tx();
 
-    tx1.wait_for(&tx2,);
     assert!(tx2.close().is_ok(), "Error closing `tx2`",);
     assert!(tx1.close().is_ok(), "Error closing `tx1` after `tx2` was closed",);
 
     let mut tx1 = TxGuard::new();
-    let tx2 = TxGuard::new();
+    let tx2 = tx1.sub_tx();
 
-    tx1.wait_for(&tx2,);
     assert!(tx2.abort().is_ok(), "Error aborting `tx2`",);
     assert!(tx1.close().is_err(), "Closed `tx1` while `tx2` was aborted",);
 
     let mut tx1 = TxGuard::new();
-    let tx2 = TxGuard::new();
+    let tx2 = tx1.sub_tx();
 
-    tx1.wait_for(&tx2,);
     tx2.abort().ok();
     assert!(tx1.abort().is_ok(), "Error aborting `tx1` after `tx2` was aborted",);
 
     let mut tx1 = TxGuard::new();
-    let tx2 = TxGuard::new();
+    let tx2 = tx1.sub_tx();
 
-    tx1.wait_for(&tx2,);
     tx2.poison();
     let mut tx1 = match tx1.close() {
       Ok(()) => panic!("Closed `tx1` while `tx2` was poisoned",),
@@ -254,12 +330,6 @@ mod tests {
     };
     tx1.clear_poisoned();
     assert!(tx1.close().is_ok(), "Error closing `tx1` after clearing the poison state",);
-    
-    let mut tx1 = TxGuard::new();
-    let tx2 = TxGuard::new();
-
-    tx1.wait_for(&tx2,);
-    tx1.poison();
   }
   #[test]
   fn test_dependency_cycle_behaviour() {
@@ -267,11 +337,9 @@ mod tests {
 
     assert!(tx1.will_wait(&tx1,), "`will_wait` is `false` for `self`",);
 
-    let mut tx2 = TxGuard::new();
-
     //Create cycle
-    tx2.wait_for(&tx1,);
-    unsafe { tx1.wait_for_unchecked(&tx2,); }
+    let mut tx2 = tx1.sub_tx();
+    unsafe { tx2.wait_for_unchecked(&tx1,); }
 
     assert!(tx1.close().is_err(), "Closed `tx1` while `tx2` was open",);
     assert!(tx2.close().is_err(), "Closed `tx2` while `tx1` was open",);
