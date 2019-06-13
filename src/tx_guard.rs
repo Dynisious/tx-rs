@@ -243,6 +243,7 @@ impl fmt::Debug for TxGuard {
 }
 
 /// A reference to a transaction.
+#[derive(Clone,)]
 pub struct TxRef(RcTxBox,);
 
 impl TxRef {
