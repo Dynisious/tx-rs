@@ -4,14 +4,16 @@
 //! Last Moddified --- 2019-06-13
 
 use super::*;
-use core::fmt;
 use alloc::sync::Arc;
+use core::fmt;
 #[cfg(feature = "futures",)]
 use core::{
+  pin::Pin,
   future::Future,
   task::{Poll, Context,},
-  pin::Pin,
 };
+#[cfg(feature = "old-futures",)]
+use old_futures::{task, Future, Async, Poll,};
 
 mod rw_lock;
 mod tx_box;
@@ -275,11 +277,35 @@ impl Future for TxRef {
   type Output = TxState;
 
   /// Returns `Poll::Pending` as long as the transaction is open.
-  fn poll(self: Pin<&mut Self>, _: &mut Context,) -> Poll<Self::Output> {
+  fn poll(self: Pin<&mut Self>, context: &mut Context,) -> Poll<Self::Output> {
     match self.tx_state() {
-      TxState::Open => Poll::Pending,
+      TxState::Open => {
+        //Queue this task to be notified once the transaction is resolved.
+        self.0.write().notify(context.waker().clone(),);
+
+        Poll::Pending
+      },
       state => Poll::Ready(state),
     }
+  }
+}
+
+#[cfg(feature = "old-futures",)]
+impl Future for TxRef {
+  type Item = TxState;
+  type Error = !;
+
+  /// Returns `Async::NotReady` as long as the transaction is open.
+  fn poll(&mut self,) -> Poll<Self::Item, Self::Error> {
+    Ok(match self.tx_state() {
+      TxState::Open => {
+        //Queue this task to be notified once the transaction is resolved.
+        self.0.write().notify(task::current(),);
+
+        Async::NotReady
+      },
+      state => Async::Ready(state),
+    })
   }
 }
 

@@ -1,14 +1,18 @@
 //! Author --- daniel.bechaz@gmail.com  
-//! Last Moddified --- 2019-06-12
+//! Last Moddified --- 2019-06-13
 
 use super::*;
-use core::fmt;
+use core::{
+  fmt,
+};
 #[cfg(feature = "futures",)]
 use core::{
+  pin::Pin,
   future::Future,
   task::{Poll, Context,},
-  pin::Pin,
 };
+#[cfg(feature = "old-futures",)]
+use old_futures::{task, Future, Async, Poll,};
 
 mod tx_box;
 
@@ -268,11 +272,33 @@ impl Future for TxRef {
   type Output = TxState;
 
   /// Returns `Poll::Pending` as long as the transaction is open.
-  fn poll(self: Pin<&mut Self>, _: &mut Context,) -> Poll<Self::Output> {
+  fn poll(self: Pin<&mut Self>, context: &mut Context,) -> Poll<Self::Output> {
     match self.tx_state() {
-      TxState::Open => Poll::Pending,
+      TxState::Open => {
+        self.0.notify(context.waker().clone(),);
+
+        Poll::Pending
+      },
       state => Poll::Ready(state),
     }
+  }
+}
+
+#[cfg(feature = "old-futures",)]
+impl Future for TxRef {
+  type Item = TxState;
+  type Error = !;
+
+  /// Returns `Poll::Pending` as long as the transaction is open.
+  fn poll(&mut self,) -> Poll<Self::Item, Self::Error> {
+    Ok(match self.tx_state() {
+      TxState::Open => {
+        self.0.notify(task::current(),);
+
+        Async::NotReady
+      },
+      state => Async::Ready(state),
+    })
   }
 }
 

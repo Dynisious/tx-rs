@@ -1,15 +1,23 @@
 //! Author --- daniel.bechaz@gmail.com  
-//! Last Moddified --- 2019-06-12
+//! Last Moddified --- 2019-06-13
 
 use super::*;
-use core::cell::Cell;
+use core::{
+  cell::Cell,
+};
 use alloc::{
   rc::Rc,
   vec::Vec,
   collections::VecDeque,
 };
+#[cfg(feature = "futures",)]
+use core::task::Waker;
+#[cfg(feature = "old-futures",)]
+use old_futures::task::Task;
 
 static DEPS_IN_USE: &str = "`dependencies` already in use";
+#[cfg(any(feature = "futures", feature = "old-futures",),)]
+static NOTIFY_IN_USE: &str = "`notify` already in use";
 
 pub(super) type RcTxBox = Rc<TxBox>;
 
@@ -17,6 +25,12 @@ pub(super) type RcTxBox = Rc<TxBox>;
 pub(super) struct TxBox {
   /// The state of the transaction.
   tx_state: Cell<TxState>,
+  /// The wakers to notify once this transaction is resolved.
+  #[cfg(feature = "futures",)]
+  notify: Cell<Option<Vec<Waker>>>,
+  /// The wakers to notify once this transaction is resolved.
+  #[cfg(feature = "old-futures",)]
+  notify: Cell<Option<Vec<Task>>>,
   /// The transactions this transaction is waiting on.
   dependencies: Cell<Option<Vec<RcTxBox>>>,
 }
@@ -51,6 +65,10 @@ impl TxBox {
   pub fn new() -> Self {
     Self {
       tx_state: Cell::new(TxState::Open,).into(),
+      #[cfg(feature = "futures",)]
+      notify: Some(Vec::new()).into(),
+      #[cfg(feature = "old-futures",)]
+      notify: Some(Vec::new()).into(),
       dependencies: Some(Vec::new()).into(),
     }
   }
@@ -134,6 +152,21 @@ impl TxBox {
               //Clear all dependencies.
               self.dependencies.set(Some(Vec::new()),);
 
+              #[cfg(feature = "futures",)] {
+              //Get all wakers.
+              let notify = self.notify.replace(Some(Vec::new()),).into_iter()
+                .flat_map(|notify,| notify,);
+              //Notify all wakers.
+              for waker in notify { waker.wake() }
+              }
+              #[cfg(feature = "old-futures",)] {
+              //Get all tasks.
+              let notify = self.notify.replace(Some(Vec::new()),).into_iter()
+                .flat_map(|notify,| notify,);
+              //Notify all wakers.
+              for task in notify { task.notify() }
+              }
+
               Ok(())
             }
           },
@@ -142,6 +175,21 @@ impl TxBox {
             self.tx_state.set(TxState::Closed,);
             //Clear the dependencies.
             self.dependencies.set(Some(Vec::new()),);
+
+            #[cfg(feature = "futures",)] {
+            //Get all wakers.
+            let notify = self.notify.replace(Some(Vec::new()),).into_iter()
+              .flat_map(|notify,| notify,);
+            //Notify all wakers.
+            for waker in notify { waker.wake() }
+            }
+            #[cfg(feature = "old-futures",)] {
+            //Get all tasks.
+            let notify = self.notify.replace(Some(Vec::new()),).into_iter()
+              .flat_map(|notify,| notify,);
+            //Notify all wakers.
+            for task in notify { task.notify() }
+            }
 
             Ok(())
           },
@@ -155,8 +203,24 @@ impl TxBox {
   #[inline]
   pub fn tx_state(&self,) -> TxState { self.tx_state.get() }
   /// Sets the transaction state to poisoned.
-  #[inline]
-  pub fn poison(&self,) { self.tx_state.set(TxState::Poisoned,) }
+  pub fn poison(&self,) {
+    self.tx_state.set(TxState::Poisoned,);
+
+    #[cfg(feature = "futures",)] {
+    //Get all wakers.
+    let notify = self.notify.replace(Some(Vec::new()),).into_iter()
+      .flat_map(|notify,| notify,);
+    //Notify all wakers.
+    for waker in notify { waker.wake() }
+    }
+    #[cfg(feature = "old-futures",)] {
+    //Get all tasks.
+    let notify = self.notify.replace(Some(Vec::new()),).into_iter()
+      .flat_map(|notify,| notify,);
+    //Notify all wakers.
+    for task in notify { task.notify() }
+    }
+  }
   /// Clears the poisoned state of this transaction and resets it to opened.
   /// 
   /// This function has no effect when the transaction is not in a poisoned state.
@@ -210,6 +274,24 @@ impl TxBox {
     dependencies.push(other_tx.clone(),);
     //Replace dependencies.
     self.dependencies.set(Some(dependencies),);
+  }
+  /// Adds `waker` to be notified once this transaction is resolved.
+  #[cfg(feature = "futures",)]
+  pub fn notify(&self, waker: Waker,) {
+    let mut notify = self.notify.replace(None,)
+      .expect(NOTIFY_IN_USE);
+    //Add this `Waker` to be notified.
+    notify.push(waker,);
+    self.notify.set(Some(notify),);
+  }
+  /// Adds `task` to be notified once this transaction is resolved.
+  #[cfg(feature = "old-futures",)]
+  pub fn notify(&self, task: Task,) {
+    let mut notify = self.notify.replace(None,)
+      .expect(NOTIFY_IN_USE);
+    //Add this `Task` to be notified.
+    notify.push(task,);
+    self.notify.set(Some(notify),);
   }
 }
 

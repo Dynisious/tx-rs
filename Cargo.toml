@@ -1,13 +1,17 @@
 [package]
 name = "tx-rs"
-version = "0.2.2"
+version = "0.2.3"
 authors = ["Dynisious <daniel.bechaz@gmail.com>"]
 edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = ["futures"]
+# default = ["old-futures"]
 futures = []
 
 [dependencies]
+old-futures = { package = "futures", version = "0.1", optional = true }
+
+[dev-dependencies]
+tokio = "0.1"

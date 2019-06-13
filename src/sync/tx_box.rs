@@ -7,6 +7,10 @@ use alloc::{
   vec::Vec,
   collections::VecDeque,
 };
+#[cfg(feature = "futures",)]
+use core::task::Waker;
+#[cfg(feature = "old-futures",)]
+use old_futures::task::Task;
 
 pub(super) type RwTxBox = Arc<RwLock<TxBox>>;
 
@@ -14,6 +18,12 @@ pub(super) type RwTxBox = Arc<RwLock<TxBox>>;
 pub(super) struct TxBox {
   /// The state of the transaction.
   tx_state: TxState,
+  /// The list of `Waker`s to notify once this transaction is resolved in some way.
+  #[cfg(feature = "futures",)]
+  notify: Vec<Waker>,
+  /// The list of `Task`s to notify once this transaction is resolved in some way.
+  #[cfg(feature = "old-futures",)]
+  notify: Vec<Task>,
   /// The transactions this transaction is waiting on.
   dependencies: Vec<RwTxBox>,
 }
@@ -47,6 +57,10 @@ impl TxBox {
   pub const fn new() -> Self {
     Self {
       tx_state: TxState::Open,
+      #[cfg(feature = "futures",)]
+      notify: Vec::new(),
+      #[cfg(feature = "old-futures",)]
+      notify: Vec::new(),
       dependencies: Vec::new(),
     }
   }
@@ -127,6 +141,13 @@ impl TxBox {
               //Clear all dependencies.
               self.dependencies.clear();
 
+              //Wake all tasks.
+              #[cfg(feature = "futures",)]
+              for waker in self.notify.drain(..,) { waker.wake() }
+              //Wake all tasks.
+              #[cfg(feature = "old-futures",)]
+              for task in self.notify.drain(..,) { task.notify() }
+
               Ok(())
             }
           },
@@ -135,6 +156,13 @@ impl TxBox {
             self.tx_state = TxState::Closed;
             //Clear the dependencies.
             self.dependencies.clear();
+
+            //Wake all tasks.
+            #[cfg(feature = "futures",)]
+            for waker in self.notify.drain(..,) { waker.wake() }
+            //Wake all tasks.
+            #[cfg(feature = "old-futures",)]
+            for task in self.notify.drain(..,) { task.notify() }
 
             Ok(())
           },
@@ -148,8 +176,16 @@ impl TxBox {
   #[inline]
   pub const fn tx_state(&self,) -> TxState { self.tx_state }
   /// Sets the transaction state to poisoned.
-  #[inline]
-  pub fn poison(&mut self,) { self.tx_state = TxState::Poisoned }
+  pub fn poison(&mut self,) {
+    self.tx_state = TxState::Poisoned;
+
+    //Notify all wakers.
+    #[cfg(feature = "futures",)]
+    for waker in self.notify.drain(..,) { waker.wake() }
+    //Notify all tasks.
+    #[cfg(feature = "old-futures",)]
+    for task in self.notify.drain(..,) { task.notify() }
+  }
   /// Clears the poisoned state of this transaction and resets it to opened.
   /// 
   /// This function has no effect when the transaction is not in a poisoned state.
@@ -182,6 +218,12 @@ impl TxBox {
     //Add `other_tx` as a dependency.
     self.dependencies.push(other_tx.clone(),);
   }
+  /// Adds `waker` to be notified once this transaction is resolved.
+  #[cfg(feature = "futures",)]
+  pub fn notify(&mut self, waker: Waker,) { self.notify.push(waker,) }
+  /// Adds `task` to be notified once this transaction is resolved.
+  #[cfg(feature = "old-futures",)]
+  pub fn notify(&mut self, task: Task,) { self.notify.push(task,) }
 }
 
 #[cfg(test,)]
