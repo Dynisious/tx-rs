@@ -25,13 +25,13 @@ while tx_ref.tx_state() == TxState::Open {}
 println!("Finished second");
 ```
 
-Transaction references ([TxRef]) implement `Future` when compiled with the `futures`
+Transaction references `TxRef` implement `Future` when compiled with the `futures`
 or `old-futures` features; allowing them to be dropped into async tasks for
 synchronisation.
 
 An example using the `old-futures` feature:
 
-```ignore
+```rust
 use tx_rs::{TxState, sync::TxGuard};
 use tokio::{prelude::*, timer::Delay};
 use std::time::{Duration, Instant,};
