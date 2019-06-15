@@ -109,7 +109,12 @@ impl TxGuard {
   /// Poisons this transaction to indicate it has entered an illegal state.
   /// 
   /// This is the recomended way to handle a `PoisonedError` encounterd while trying to
-  /// close this transaction if you are unable to recover using `tx.clear_poisoned()`.
+  /// close this transaction if you are unable to recover using
+  /// [`tx.clear_poisoned()`](../struct.TxGuard.html#method.clear_poisoned).
+  /// 
+  /// If a dependency cycle is causing a deadlock, calling this function on one of the
+  /// transactions in the cycle is a way to allow computation to continue assuming all
+  /// other transactions properly handle `PoisonError`s.
   pub fn poison(self,) {
     //Get the `tx_box` and avoid running the destructor for `self`.
     let tx_box = {
@@ -157,6 +162,9 @@ impl TxGuard {
   /// This function adds `other_tx` as a dependency without checking if the new
   /// dependency will create a cycle; it is therefor the responsibility of the caller to
   /// ensure no cycles will be created to avoid deadlocks.
+  /// 
+  /// In the event that a deadlock is detected, call
+  /// [`tx.poison()`](../struct.TxGuard.html#method.poison) to resolve it.
   pub unsafe fn wait_for_unchecked(&mut self, other_tx: &TxRef,) {
     self.tx_box.write().wait_for_unchecked(&other_tx.0,)
   }

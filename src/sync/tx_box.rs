@@ -44,7 +44,7 @@ impl TxBox {
       if core::ptr::eq::<Self>(dep.as_ref(), other_tx,) { return true }
 
       //Add the dependencies of this dependency to be searched.
-      dependencies.extend(dep.dependencies.iter().map(Clone::clone,),);
+      dependencies.extend(dep.dependencies.iter().cloned(),);
     }
 
     false
@@ -201,7 +201,7 @@ impl TxBox {
 
     //Clone the dependencies.
     let deps = self.dependencies.iter()
-      .map(Clone::clone,)
+      .cloned()
       .collect();
 
     //Check the dependency tree for `other_tx`.

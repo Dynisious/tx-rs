@@ -1,23 +1,16 @@
 //! Author --- daniel.bechaz@gmail.com  
-//! Last Moddified --- 2019-06-13
+//! Last Moddified --- 2019-06-15
 
 use super::*;
-use core::{
-  cell::Cell,
-};
+use core::cell::Cell;
 use alloc::{
   rc::Rc,
   vec::Vec,
-  collections::VecDeque,
 };
 #[cfg(feature = "futures",)]
 use core::task::Waker;
 #[cfg(feature = "old-futures",)]
 use old_futures::task::Task;
-
-static DEPS_IN_USE: &str = "`dependencies` already in use";
-#[cfg(any(feature = "futures", feature = "old-futures",),)]
-static NOTIFY_IN_USE: &str = "`notify` already in use";
 
 pub(super) type RcTxBox = Rc<TxBox>;
 
@@ -27,32 +20,30 @@ pub(super) struct TxBox {
   tx_state: Cell<TxState>,
   /// The wakers to notify once this transaction is resolved.
   #[cfg(feature = "futures",)]
-  notify: Cell<Option<Vec<Waker>>>,
+  notify: Cell<Vec<Waker>>,
   /// The wakers to notify once this transaction is resolved.
   #[cfg(feature = "old-futures",)]
-  notify: Cell<Option<Vec<Task>>>,
+  notify: Cell<Vec<Task>>,
   /// The transactions this transaction is waiting on.
-  dependencies: Cell<Option<Vec<RcTxBox>>>,
+  dependencies: Cell<Vec<RcTxBox>>,
 }
 
 impl TxBox {
-  /// Breadth first searches the dependency tree for `other_tx` and returns `true` if it
+  /// Depth first searches the dependency tree for `other_tx` and returns `true` if it
   /// is found.
   /// 
   /// # Params
   /// 
   /// dependencies --- The queue of dependencies to be checked.  
   /// other_tx --- The transaction to search for.  
-  fn _is_dependency(mut dependencies: VecDeque<RcTxBox>, other_tx: &Self,) -> bool {
-    while let Some(dep) = dependencies.pop_front() {
+  fn _is_dependency(mut dependencies: Vec<RcTxBox>, other_tx: &Self,) -> bool {
+    while let Some(dep) = dependencies.pop() {
       if core::ptr::eq::<Self>(dep.as_ref(), other_tx,) { return true }
 
-      let deps = dep.dependencies.replace(None,)
-        .expect(DEPS_IN_USE);
       //Add the dependencies of this dependency to be searched.
-      dependencies.extend(deps.iter().map(Clone::clone,),);
-      //Replace the dependencies.
-      dep.dependencies.set(Some(deps),);
+      dependencies.extend(
+        unsafe { &*dep.dependencies.as_ptr() }.iter().cloned(),
+      );
     }
 
     false
@@ -62,14 +53,14 @@ impl TxBox {
 impl TxBox {
   /// Creates a new `TxBox`.
   #[inline]
-  pub fn new() -> Self {
+  pub const fn new() -> Self {
     Self {
-      tx_state: Cell::new(TxState::Open,).into(),
+      tx_state: Cell::new(TxState::Open,),
+      dependencies: Cell::new(Vec::new(),),
       #[cfg(feature = "futures",)]
-      notify: Some(Vec::new()).into(),
+      notify: Cell::new(Vec::new(),),
       #[cfg(feature = "old-futures",)]
-      notify: Some(Vec::new()).into(),
-      dependencies: Some(Vec::new()).into(),
+      notify: Cell::new(Vec::new(),),
     }
   }
   /// Attempts to close this transaction.
@@ -102,10 +93,9 @@ impl TxBox {
 
           //Check the dependencies.
           let mut index = 0;
-          let mut dependencies = self.dependencies.replace(None,)
-            .expect(DEPS_IN_USE,);
-          while index < dependencies.len() {
-            match dependencies[index].tx_state() {
+          let deps = unsafe { &mut *self.dependencies.as_ptr() };
+          while index < deps.len() {
+            match deps[index].tx_state() {
               //A dependency is aborted, also abort.
               TxState::Aborted => state = TxState::Aborted,
               //A dependency is poisoned, exit immediately.
@@ -113,15 +103,13 @@ impl TxBox {
                 //Poison this transaction.
                 self.tx_state.set(TxState::Poisoned,);
                 //Remove the dependency.
-                dependencies.swap_remove(index,);
-                //Replace the dependency.
-                self.dependencies.set(Some(dependencies),);
+                deps.swap_remove(index,);
 
                 return Err(TxError::PoisonedError);
               },
               //A dependency is closed, remove it.
               TxState::Closed => {
-                dependencies.swap_remove(index,);
+                deps.swap_remove(index,);
                 continue;
               }
               //A dependency is open while we're trying to close.
@@ -130,8 +118,6 @@ impl TxBox {
 
             index += 1;
           }
-          //Replace the dependencies.
-          self.dependencies.set(Some(dependencies),);
 
           state
         };
@@ -150,22 +136,14 @@ impl TxBox {
               //Abort this transaction.
               self.tx_state.set(TxState::Aborted,);
               //Clear all dependencies.
-              self.dependencies.set(Some(Vec::new()),);
+              unsafe { &mut *self.dependencies.as_ptr() }.clear();
 
-              #[cfg(feature = "futures",)] {
-              //Get all wakers.
-              let notify = self.notify.replace(Some(Vec::new()),).into_iter()
-                .flat_map(|notify,| notify,);
+              #[cfg(feature = "futures",)]
               //Notify all wakers.
-              for waker in notify { waker.wake() }
-              }
-              #[cfg(feature = "old-futures",)] {
-              //Get all tasks.
-              let notify = self.notify.replace(Some(Vec::new()),).into_iter()
-                .flat_map(|notify,| notify,);
-              //Notify all wakers.
-              for task in notify { task.notify() }
-              }
+              for waker in unsafe { &mut *self.notify.as_ptr() }.drain(..,) { waker.wake() }
+              #[cfg(feature = "old-futures",)]
+              //Notify all tasks.
+              for task in unsafe { &mut *self.notify.as_ptr() }.drain(..,) { task.notify() }
 
               Ok(())
             }
@@ -174,22 +152,14 @@ impl TxBox {
           TxState::Closed => {
             self.tx_state.set(TxState::Closed,);
             //Clear the dependencies.
-            self.dependencies.set(Some(Vec::new()),);
+            unsafe { &mut *self.dependencies.as_ptr() }.clear();
 
-            #[cfg(feature = "futures",)] {
-            //Get all wakers.
-            let notify = self.notify.replace(Some(Vec::new()),).into_iter()
-              .flat_map(|notify,| notify,);
+            #[cfg(feature = "futures",)]
             //Notify all wakers.
-            for waker in notify { waker.wake() }
-            }
-            #[cfg(feature = "old-futures",)] {
-            //Get all tasks.
-            let notify = self.notify.replace(Some(Vec::new()),).into_iter()
-              .flat_map(|notify,| notify,);
-            //Notify all wakers.
-            for task in notify { task.notify() }
-            }
+            for waker in unsafe { &mut *self.notify.as_ptr() }.drain(..,) { waker.wake() }
+            #[cfg(feature = "old-futures",)]
+            //Notify all tasks.
+            for task in unsafe { &mut *self.notify.as_ptr() }.drain(..,) { task.notify() }
 
             Ok(())
           },
@@ -206,20 +176,12 @@ impl TxBox {
   pub fn poison(&self,) {
     self.tx_state.set(TxState::Poisoned,);
 
-    #[cfg(feature = "futures",)] {
-    //Get all wakers.
-    let notify = self.notify.replace(Some(Vec::new()),).into_iter()
-      .flat_map(|notify,| notify,);
+    #[cfg(feature = "futures",)]
     //Notify all wakers.
-    for waker in notify { waker.wake() }
-    }
-    #[cfg(feature = "old-futures",)] {
-    //Get all tasks.
-    let notify = self.notify.replace(Some(Vec::new()),).into_iter()
-      .flat_map(|notify,| notify,);
+    for waker in unsafe { &mut *self.notify.as_ptr() }.drain(..,) { waker.wake() }
+    #[cfg(feature = "old-futures",)]
     //Notify all wakers.
-    for task in notify { task.notify() }
-    }
+    for task in unsafe { &mut *self.notify.as_ptr() }.drain(..,) { task.notify() }
   }
   /// Clears the poisoned state of this transaction and resets it to opened.
   /// 
@@ -235,17 +197,11 @@ impl TxBox {
     if core::ptr::eq(self, other_tx,) { return true }
 
     //Get the dependencies.
-    let dependencies = self.dependencies.replace(None,)
-      .expect(DEPS_IN_USE);
-    //Clone the dependencies.
-    let deps = dependencies.iter()
-      .map(Clone::clone,)
-      .collect();
-    //Replace the dependency list.
-    self.dependencies.set(Some(dependencies),);
+    let dependencies = unsafe { &*self.dependencies.as_ptr() }
+      .iter().cloned().collect();
 
     //Check the dependency tree for `other_tx`.
-    Self::_is_dependency(deps, other_tx,)
+    Self::_is_dependency(dependencies, other_tx,)
   }
   /// Adds `other_tx` as a dependency of this transaction.
   /// 
@@ -268,30 +224,17 @@ impl TxBox {
   /// dependency will create a cycle; it is therefor the responsibility of the caller to
   /// ensure no cycles will be created to avoid deadlocks.
   pub unsafe fn wait_for_unchecked(&self, other_tx: &RcTxBox,) {
-    let mut dependencies = self.dependencies.replace(None,)
-      .expect(DEPS_IN_USE);
-    //Add `other_tx` as a dependency.
-    dependencies.push(other_tx.clone(),);
-    //Replace dependencies.
-    self.dependencies.set(Some(dependencies),);
+    { &mut *self.dependencies.as_ptr() }.push(other_tx.clone(),);
   }
   /// Adds `waker` to be notified once this transaction is resolved.
   #[cfg(feature = "futures",)]
   pub fn notify(&self, waker: Waker,) {
-    let mut notify = self.notify.replace(None,)
-      .expect(NOTIFY_IN_USE);
-    //Add this `Waker` to be notified.
-    notify.push(waker,);
-    self.notify.set(Some(notify),);
+    unsafe { &mut *self.notify.as_ptr() }.push(waker,);
   }
   /// Adds `task` to be notified once this transaction is resolved.
   #[cfg(feature = "old-futures",)]
   pub fn notify(&self, task: Task,) {
-    let mut notify = self.notify.replace(None,)
-      .expect(NOTIFY_IN_USE);
-    //Add this `Task` to be notified.
-    notify.push(task,);
-    self.notify.set(Some(notify),);
+    unsafe { &mut *self.notify.as_ptr() }.push(task,);
   }
 }
 

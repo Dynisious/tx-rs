@@ -1,8 +1,8 @@
-//! A small library providing transactions useful for implementing atomic or ordered
+//! A library providing `transactions` useful for implementing atomic or ordered
 //! operations.
 //! 
-//! Transactions are a useful synchronisation primitive, providing a way of checkpointing
-//! the progress of other threads of execution and enforcing an order of operations between threads.
+//! Transactions are a synchronisation primitive; a way of checkpointing the progress of
+//! other threads of execution and/or enforcing an order of operations between threads.
 //! 
 //! ```rust
 //! use tx_rs::{TxState, sync::TxGuard};
@@ -24,8 +24,10 @@
 //! ```
 //! 
 //! Transaction references ([TxRef]) implement `Future` when compiled with the `futures`
-//! or `old-futures` features; effortlessly allowing them to be used in task
+//! or `old-futures` features; allowing them to be dropped into async tasks for
 //! synchronisation.
+//! 
+//! An example using the `old-futures` feature:
 //! 
 //! ```ignore
 //! use tx_rs::{TxState, sync::TxGuard};
@@ -55,11 +57,11 @@
 //! ```
 //! 
 //! Author --- daniel.bechaz@gmail.com  
-//! Last Moddified --- 2019-06-13
+//! Last Moddified --- 2019-06-15
 
 #![deny(missing_docs,)]
 #![no_std]
-#![feature(cell_update, range_is_empty, weak_counts, const_fn, const_vec_new, test, never_type,)]
+#![feature(const_fn, const_vec_new, test, never_type,)]
 
 #[cfg(all(feature = "futures", feature = "old-futures",),)]
 compile_error!("`futures` and `old-futures` features are mutually exclusive",);
