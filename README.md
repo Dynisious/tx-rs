@@ -59,4 +59,3 @@ tokio::run(future::lazy(move || {
 ```
 
 Author --- daniel.bechaz@gmail.com  
-Last Moddified --- 2019-06-15
